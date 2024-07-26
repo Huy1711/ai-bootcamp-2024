@@ -1,5 +1,6 @@
 # autoflake: off
 # flake8: noqa: F841
+import heapq
 import sys
 from typing import Dict, List, cast
 
@@ -76,17 +77,22 @@ class SemanticVectorStore(BaseVectorStore):
         # the query embedding with the document embeddings
         # HINT: np.dot
         "Your code here"
-        dproduct_arr = None
+        dproduct_arr = [np.dot(qembed_np, per_dembed_np) for per_dembed_np in dembed_np]
         # calculate the cosine similarity
         # by dividing the dot product by the norm
         # HINT: np.linalg.norm
         "Your code here"
-        cos_sim_arr = None
+        qembed_norm = np.linalg.norm(qembed_np)
+        dembed_norm = np.linalg.norm(dembed_np, axis=1)
+        cos_sim_arr = np.array(dproduct_arr) / (qembed_norm * dembed_norm)
 
         # get the indices of the top k similarities
         "Your code here"
-        similarities = None
-        node_ids = None
+        topk_score_index_pairs = heapq.nlargest(
+            similarity_top_k, enumerate(cos_sim_arr), key=lambda x: x[1]
+        )
+        similarities = [pair[1] for pair in topk_score_index_pairs]
+        node_ids = [doc_ids[pair[0]] for pair in topk_score_index_pairs]
 
         return similarities, node_ids
 
