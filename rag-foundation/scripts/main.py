@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import List
 
 import fire
 from llama_index.core import Document
@@ -8,6 +9,7 @@ from llama_index.core.node_parser import SentenceSplitter
 from vector_store.node import TextNode, VectorStoreQueryResult
 from vector_store.semantic_vector_store import SemanticVectorStore
 from vector_store.sparse_vector_store import SparseVectorStore
+from vector_store.advanced import HybridSearch
 
 
 def prepare_data_nodes(documents: list, chunk_size: int = 200) -> list[TextNode]:
@@ -47,46 +49,72 @@ def prepare_vector_store(documents: list, mode: str, force_index=False, chunk_si
         vector_store: Vector store object.
     """
     if mode == "sparse":
-        vector_store = SparseVectorStore(
-            persist=True,
-            saved_file="data/sparse.csv",
-            metadata_file="data/sparse_metadata.json",
-            force_index=force_index,
-        )
+        vector_stores = [
+            SparseVectorStore(
+                persist=True,
+                saved_file="data/sparse.csv",
+                metadata_file="data/sparse_metadata.json",
+                force_index=force_index,
+            )
+        ]
     elif mode == "semantic":
-        vector_store = SemanticVectorStore(
-            persist=True,
-            saved_file="data/dense.csv",
-            force_index=force_index,
-        )
+        vector_stores = [
+            SemanticVectorStore(
+                persist=True,
+                saved_file="data/dense.csv",
+                force_index=force_index,
+            )
+        ]
+    elif mode == "hybrid":
+        vector_stores = [
+            SparseVectorStore(
+                persist=True,
+                saved_file="data/sparse.csv",
+                metadata_file="data/sparse_metadata.json",
+                force_index=force_index,
+            ),
+            SemanticVectorStore(
+                persist=True,
+                saved_file="data/dense.csv",
+                force_index=force_index,
+            )
+        ]
     else:
-        raise ValueError("Invalid mode. Choose either `sparse` or `semantic`.")
+        raise ValueError("Invalid mode. Choose either `sparse`, `semantic` or `hybrid`.")
 
     if force_index:
         nodes = prepare_data_nodes(documents=documents, chunk_size=chunk_size)
-        vector_store.add(nodes)
+        for vector_store in vector_stores:
+            vector_store.add(nodes)
 
-    return vector_store
+    return vector_stores
 
 
 class RAGPipeline:
-    def __init__(self, vector_store: SemanticVectorStore, prompt_template: str):
-        self.vector_store = vector_store
+    def __init__(self, vector_stores: List[SemanticVectorStore], prompt_template: str):
+        self.vector_stores = vector_stores
         self.prompt_template = prompt_template
 
         # choose your model from groq or openai/azure
-        self.model = None
+        # self.model = None
 
         # GROQ
-        # from langchain_groq import ChatGroq
-        # self.model = ChatGroq(model="llama3-70b-8192", temperature=0)
+        from langchain_groq import ChatGroq
+        self.model = ChatGroq(model="llama3-70b-8192", temperature=0)
 
         # OpenAI
         # from langchain_openai import ChatOpenAI
         # self.model = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
 
     def retrieve(self, query: str, top_k: int = 5) -> VectorStoreQueryResult:
-        query_result = self.vector_store.query(query, top_k=top_k)
+        if len(self.vector_stores) == 1:
+            query_result = self.vector_stores[0].query(query, top_k=top_k)
+        else:
+            queries = []
+            for vector_store in self.vector_stores:
+                query_result = vector_store.query(query, top_k=top_k)
+                queries.append(query_result)
+            query_result = HybridSearch.rrf_rerank(queries, top_k)
         return query_result
 
     def answer(self, query: str, top_k: int = 5) -> tuple[str, list[str]]:
@@ -152,14 +180,14 @@ def main(
         # initialize the vector store
         # and rag pipeline
         # Remember to force_index=True if you want to override the existing index
-        vector_store = prepare_vector_store(
+        vector_stores = prepare_vector_store(
             documents, mode=mode, force_index=force_index, chunk_size=chunk_size
         )
 
         # NOTE: Should design your own template
         prompt_template = """Question: {}\n\nGiven context: {}\n\nAnswer:"""
 
-        rag_pipeline = RAGPipeline(vector_store, prompt_template=prompt_template)
+        rag_pipeline = RAGPipeline(vector_stores, prompt_template=prompt_template)
 
         for q in values["qas"]:
             # for each question in the paper
